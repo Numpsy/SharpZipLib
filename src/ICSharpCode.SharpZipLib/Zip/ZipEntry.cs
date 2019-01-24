@@ -585,6 +585,10 @@ namespace ICSharpCode.SharpZipLib.Zip
 					{
 						result = 20;
 					}
+					else if (CompressionMethod.Deflate64 == method)
+					{
+						result = 21;
+					}
 					else if (IsDirectory == true)
 					{
 						result = 20;
@@ -615,6 +619,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 					((Version == 10) ||
 					(Version == 11) ||
 					(Version == 20) ||
+					(Version == 21) ||
 					(Version == 45) ||
 					(Version == 51)) &&
 					IsCompressionMethodSupported();
@@ -1278,6 +1283,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 		{
 			return
 				(method == CompressionMethod.Deflated) ||
+				(method == CompressionMethod.Deflate64) ||
 				(method == CompressionMethod.Stored);
 		}
 

@@ -882,6 +882,10 @@ namespace ICSharpCode.SharpZipLib.Zip
 					result = new InflaterInputStream(result, new Inflater(true));
 					break;
 
+				case CompressionMethod.Deflate64:
+					result = new SharpCompress.Compressors.Deflate64.Deflate64Stream(result, SharpCompress.Compressors.Deflate64.CompressionMode.Decompress);
+					break;
+
 				default:
 					throw new ZipException("Unsupported compression method " + method);
 			}
@@ -1137,7 +1141,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 						}
 
 						if ((extractVersion > ZipConstants.VersionMadeBy)
-							|| ((extractVersion > 20) && (extractVersion < ZipConstants.VersionZip64)))
+							|| ((extractVersion > 21) && (extractVersion < ZipConstants.VersionZip64)))
 						{
 							throw new ZipException(string.Format("Version required to extract this entry not supported ({0})", extractVersion));
 						}
