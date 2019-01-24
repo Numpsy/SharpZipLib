@@ -1367,5 +1367,25 @@ namespace ICSharpCode.SharpZipLib.Tests.Zip
 			Assert.IsTrue(blewUp, "Should have failed to load the file");
 			Assert.IsFalse(ms.IsClosed, "Underlying stream should NOT be closed");
 		}
+
+		[Test]
+		public void Deflate64()
+		{
+			using (var fs = File.OpenRead(@"C:\Dev\TFS3\SharedPlugins\Main\tests\Test Data Files\Zip Test Data\deflate-64.zip"))
+			{
+				using (var zipFile = new ZipFile(fs, true))
+				{
+					foreach (ZipEntry entry in zipFile)
+					{
+						var entryStream = zipFile.GetInputStream(entry);
+
+						using (var output = File.OpenWrite(@"C:\Dev\flaps.zip"))
+						{
+							entryStream.CopyTo(output);
+						}
+					}
+				}
+			}
+		}
 	}
 }
