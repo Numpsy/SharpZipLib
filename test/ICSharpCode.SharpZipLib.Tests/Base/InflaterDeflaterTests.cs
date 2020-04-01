@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Security;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace ICSharpCode.SharpZipLib.Tests.Base
 {
@@ -15,6 +16,31 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 	[TestFixture]
 	public class InflaterDeflaterTestSuite
 	{
+		private void VerifyInflatedData(byte[] original, byte[] buf2, int level, bool zlib)
+		{
+			for (int i = 0; i < original.Length; ++i)
+			{
+				if (buf2[i] != original[i])
+				{
+					string description = string.Format("Difference at {0} level {1} zlib {2} ", i, level, zlib);
+					if (original.Length < 2048)
+					{
+						var builder = new StringBuilder(description);
+						for (int d = 0; d < original.Length; ++d)
+						{
+							builder.AppendFormat("{0} ", original[d]);
+						}
+
+						Assert.Fail(builder.ToString());
+					}
+					else
+					{
+						Assert.Fail(description);
+					}
+				}
+			}
+		}
+
 		private void Inflate(MemoryStream ms, byte[] original, int level, bool zlib)
 		{
 			ms.Seek(0, SeekOrigin.Begin);
@@ -51,27 +77,46 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 				Assert.Fail("Lengths different");
 			}
 
-			for (int i = 0; i < original.Length; ++i)
-			{
-				if (buf2[i] != original[i])
-				{
-					string description = string.Format("Difference at {0} level {1} zlib {2} ", i, level, zlib);
-					if (original.Length < 2048)
-					{
-						var builder = new StringBuilder(description);
-						for (int d = 0; d < original.Length; ++d)
-						{
-							builder.AppendFormat("{0} ", original[d]);
-						}
+			VerifyInflatedData(original, buf2, level, zlib);
+		}
 
-						Assert.Fail(builder.ToString());
-					}
-					else
+		private async Task InflateAsync(MemoryStream ms, byte[] original, int level, bool zlib)
+		{
+			ms.Seek(0, SeekOrigin.Begin);
+
+			var inflater = new Inflater(!zlib);
+			var inStream = new InflaterInputStream(ms, inflater);
+			byte[] buf2 = new byte[original.Length];
+
+			int currentIndex = 0;
+			int count = buf2.Length;
+
+			try
+			{
+				while (true)
+				{
+					int numRead = await inStream.ReadAsync(buf2, currentIndex, count);
+					if (numRead <= 0)
 					{
-						Assert.Fail(description);
+						break;
 					}
+					currentIndex += numRead;
+					count -= numRead;
 				}
 			}
+			catch (Exception ex)
+			{
+				Console.WriteLine("Unexpected exception - '{0}'", ex.Message);
+				throw;
+			}
+
+			if (currentIndex != original.Length)
+			{
+				Console.WriteLine("Original {0}, new {1}", original.Length, currentIndex);
+				Assert.Fail("Lengths different");
+			}
+
+			VerifyInflatedData(original, buf2, level, zlib);
 		}
 
 		private MemoryStream Deflate(byte[] data, int level, bool zlib)
@@ -89,6 +134,21 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 			return memoryStream;
 		}
 
+		private async Task<MemoryStream> DeflateAsync(byte[] data, int level, bool zlib)
+		{
+			var memoryStream = new MemoryStream();
+
+			var deflater = new Deflater(level, !zlib);
+			using (DeflaterOutputStream outStream = new DeflaterOutputStream(memoryStream, deflater))
+			{
+				outStream.IsStreamOwner = false;
+				await outStream.WriteAsync(data, 0, data.Length);
+				await outStream.FlushAsync();
+				outStream.Finish();
+			}
+			return memoryStream;
+		}
+
 		private void RandomDeflateInflate(int size, int level, bool zlib)
 		{
 			byte[] buffer = new byte[size];
@@ -97,6 +157,16 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 
 			MemoryStream ms = Deflate(buffer, level, zlib);
 			Inflate(ms, buffer, level, zlib);
+		}
+
+		private async Task RandomDeflateInflateAsync(int size, int level, bool zlib)
+		{
+			byte[] buffer = new byte[size];
+			var rnd = new Random();
+			rnd.NextBytes(buffer);
+
+			MemoryStream ms = await DeflateAsync(buffer, level, zlib);
+			await InflateAsync(ms, buffer, level, zlib);
 		}
 
 		/// <summary>
@@ -109,6 +179,20 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 			for (int level = 0; level < 10; ++level)
 			{
 				RandomDeflateInflate(100000, level, true);
+			}
+		}
+
+		/// <summary>
+		/// Basic async inflate/deflate test
+		/// </summary>
+		[Test]
+		[Category("Base")]
+		[Category("Async")]
+		public async Task InflateDeflateZlibAsync()
+		{
+			for (int level = 0; level < 10; ++level)
+			{
+				await RandomDeflateInflateAsync(100000, level, true);
 			}
 		}
 
@@ -172,6 +256,20 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 			for (int level = 0; level < 10; ++level)
 			{
 				RandomDeflateInflate(100000, level, false);
+			}
+		}
+
+		/// <summary>
+		/// Basic async inflate/deflate test
+		/// </summary>
+		[Test]
+		[Category("Base")]
+		[Category("Async")]
+		public async Task InflateDeflateNonZlibAsync()
+		{
+			for (int level = 0; level < 10; ++level)
+			{
+				await RandomDeflateInflateAsync (100000, level, false);
 			}
 		}
 
@@ -288,6 +386,47 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 			{
 				char[] buffer = new char[5];
 				int readCount = textReader.Read(buffer, 0, 5);
+				Assert.AreEqual(5, readCount);
+
+				var b = new StringBuilder();
+				b.Append(buffer);
+				Assert.AreEqual("Hello", b.ToString());
+			}
+
+			File.Delete(tempFile);
+		}
+
+		[Test]
+		[Category("Base")]
+		[Category("Async")]
+		public async Task CloseInflatorWithNestedUsingAsync()
+		{
+			string tempFile = null;
+			try
+			{
+				tempFile = Path.GetTempPath();
+			}
+			catch (SecurityException)
+			{
+			}
+
+			Assert.IsNotNull(tempFile, "No permission to execute this test?");
+
+			tempFile = Path.Combine(tempFile, "SharpZipTest.Zip");
+			using (FileStream diskFile = File.Create(tempFile))
+			using (DeflaterOutputStream deflator = new DeflaterOutputStream(diskFile))
+			using (StreamWriter textWriter = new StreamWriter(deflator))
+			{
+				await textWriter.WriteAsync("Hello");
+				await textWriter.FlushAsync();
+			}
+
+			using (FileStream diskFile = File.OpenRead(tempFile))
+			using (InflaterInputStream deflator = new InflaterInputStream(diskFile))
+			using (StreamReader textReader = new StreamReader(deflator))
+			{
+				char[] buffer = new char[5];
+				int readCount = await textReader.ReadAsync(buffer, 0, 5);
 				Assert.AreEqual(5, readCount);
 
 				var b = new StringBuilder();
