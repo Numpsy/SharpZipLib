@@ -144,7 +144,7 @@ namespace ICSharpCode.SharpZipLib.Tests.Base
 				outStream.IsStreamOwner = false;
 				await outStream.WriteAsync(data, 0, data.Length);
 				await outStream.FlushAsync();
-				outStream.Finish();
+				await outStream.FinishAsync(default);
 			}
 			return memoryStream;
 		}

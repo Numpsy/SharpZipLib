@@ -2,6 +2,8 @@ using ICSharpCode.SharpZipLib.Encryption;
 using System;
 using System.IO;
 using System.Security.Cryptography;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace ICSharpCode.SharpZipLib.Zip.Compression.Streams
 {
@@ -119,7 +121,45 @@ namespace ICSharpCode.SharpZipLib.Zip.Compression.Streams
 			}
 
 			baseOutputStream_.Flush();
+			FinishEncrypting();
+		}
 
+		/// <summary>
+		/// Finishes the stream by calling finish() on the deflater.
+		/// </summary>
+		/// <exception cref="SharpZipBaseException">
+		/// Not all input is deflated
+		/// </exception>
+		public virtual async Task FinishAsync(CancellationToken cancellationToken)
+		{
+			deflater_.Finish();
+			while (!deflater_.IsFinished)
+			{
+				int len = deflater_.Deflate(buffer_, 0, buffer_.Length);
+				if (len <= 0)
+				{
+					break;
+				}
+
+				if (cryptoTransform_ != null)
+				{
+					EncryptBlock(buffer_, 0, len);
+				}
+
+				await baseOutputStream_.WriteAsync(buffer_, 0, len, cancellationToken).ConfigureAwait(false);
+			}
+
+			if (!deflater_.IsFinished)
+			{
+				throw new SharpZipBaseException("Can't deflate all input?");
+			}
+
+			await baseOutputStream_.FlushAsync(cancellationToken).ConfigureAwait(false);
+			FinishEncrypting();
+		}
+
+		private void FinishEncrypting()
+		{
 			if (cryptoTransform_ != null)
 			{
 				if (cryptoTransform_ is ZipAESTransform)
@@ -268,6 +308,30 @@ namespace ICSharpCode.SharpZipLib.Zip.Compression.Streams
 			}
 		}
 
+		private async Task DeflateAsync(bool flushing, CancellationToken cancellationToken)
+		{
+			while (flushing || !deflater_.IsNeedingInput)
+			{
+				int deflateCount = deflater_.Deflate(buffer_, 0, buffer_.Length);
+
+				if (deflateCount <= 0)
+				{
+					break;
+				}
+				if (cryptoTransform_ != null)
+				{
+					EncryptBlock(buffer_, 0, deflateCount);
+				}
+
+				await baseOutputStream_.WriteAsync(buffer_, 0, deflateCount, cancellationToken).ConfigureAwait(false);
+			}
+
+			if (!deflater_.IsNeedingInput)
+			{
+				throw new SharpZipBaseException("DeflaterOutputStream can't deflate all input?");
+			}
+		}
+
 		#endregion Deflation Support
 
 		#region Stream Overrides
@@ -389,6 +453,14 @@ namespace ICSharpCode.SharpZipLib.Zip.Compression.Streams
 			baseOutputStream_.Flush();
 		}
 
+		/// <inheritdoc/>
+		public override async Task FlushAsync(CancellationToken cancellationToken)
+		{
+			deflater_.Flush();
+			await DeflateAsync(true, cancellationToken).ConfigureAwait(false);
+			await baseOutputStream_.FlushAsync(cancellationToken).ConfigureAwait(false);
+		}
+
 		/// <summary>
 		/// Calls <see cref="Finish"/> and closes the underlying
 		/// stream when <see cref="IsStreamOwner"></see> is true.
@@ -459,6 +531,13 @@ namespace ICSharpCode.SharpZipLib.Zip.Compression.Streams
 		{
 			deflater_.SetInput(buffer, offset, count);
 			Deflate();
+		}
+
+		/// <inheritdoc/>
+		public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+		{
+			deflater_.SetInput(buffer, offset, count);
+			return DeflateAsync(false, cancellationToken);
 		}
 
 		#endregion Stream Overrides
