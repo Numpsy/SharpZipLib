@@ -1,9 +1,11 @@
 using ICSharpCode.SharpZipLib.Checksum;
+using ICSharpCode.SharpZipLib.Core;
 using ICSharpCode.SharpZipLib.Zip.Compression;
 using ICSharpCode.SharpZipLib.Zip.Compression.Streams;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 
 namespace ICSharpCode.SharpZipLib.Zip
 {
@@ -95,7 +97,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <param name="comment">
 		/// The comment text for the entire archive.
 		/// </param>
-		/// <exception name ="ArgumentOutOfRangeException">
+		/// <exception cref="ArgumentOutOfRangeException">
 		/// The converted comment is longer than 0xffff bytes.
 		/// </exception>
 		public void SetComment(string comment)
@@ -147,6 +149,12 @@ namespace ICSharpCode.SharpZipLib.Zip
 		}
 
 		/// <summary>
+		/// Used for transforming the names of entries added by <see cref="PutNextEntry(ZipEntry)"/>.
+		/// Defaults to <see cref="PathTransformer"/>, set to null to disable transforms and use names as supplied.
+		/// </summary>
+		public INameTransform NameTransform { get; set; } = new PathTransformer();
+
+		/// <summary>
 		/// Write an unsigned short in little endian byte order.
 		/// </summary>
 		private void WriteLeShort(int value)
@@ -182,6 +190,22 @@ namespace ICSharpCode.SharpZipLib.Zip
 			}
 		}
 
+		// Apply any configured transforms/cleaning to the name of the supplied entry.
+		private void TransformEntryName(ZipEntry entry)
+		{
+			if (this.NameTransform != null)
+			{
+				if (entry.IsDirectory)
+				{
+					entry.Name = this.NameTransform.TransformDirectory(entry.Name);
+				}
+				else
+				{
+					entry.Name = this.NameTransform.TransformFile(entry.Name);
+				}
+			}
+		}
+
 		/// <summary>
 		/// Starts a new Zip entry. It automatically closes the previous
 		/// entry if present.
@@ -206,6 +230,9 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// Entry name is too long<br/>
 		/// Finish has already been called<br/>
 		/// </exception>
+		/// <exception cref="System.NotImplementedException">
+		/// The Compression method specified for the entry is unsupported.
+		/// </exception>
 		public void PutNextEntry(ZipEntry entry)
 		{
 			if (entry == null)
@@ -229,6 +256,19 @@ namespace ICSharpCode.SharpZipLib.Zip
 			}
 
 			CompressionMethod method = entry.CompressionMethod;
+
+			// Check that the compression is one that we support
+			if (method != CompressionMethod.Deflated && method != CompressionMethod.Stored)
+			{
+				throw new NotImplementedException("Compression method not supported");
+			}
+
+			// A password must have been set in order to add AES encrypted entries
+			if (entry.AESKeySize > 0 && string.IsNullOrEmpty(this.Password))
+			{
+				throw new InvalidOperationException("The Password property must be set before AES encrypted entries can be added");
+			}
+
 			int compressionLevel = defaultCompressionLevel;
 
 			// Clear flags that the library manages internally
@@ -288,6 +328,15 @@ namespace ICSharpCode.SharpZipLib.Zip
 			if (Password != null)
 			{
 				entry.IsCrypted = true;
+				
+				// In case of AES the CRC is always 0 according to specification.
+				// This also prevents that a data descriptor is needed for the CRC as it is the case for other
+				// password protected zip files. AES uses a 10 Byte auth code instead of the CRC
+				if (entry.AESKeySize != 0)
+				{
+					entry.Crc = 0;
+				}
+
 				if (entry.Crc < 0)
 				{
 					// Need to append a data descriptor as the crc isnt available for use
@@ -327,7 +376,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 				}
 				else
 				{
-					WriteLeInt(entry.IsCrypted ? (int)entry.CompressedSize + ZipConstants.CryptoHeaderSize : (int)entry.CompressedSize);
+					WriteLeInt((int)entry.CompressedSize + entry.EncryptionOverheadSize);
 					WriteLeInt((int)entry.Size);
 				}
 			}
@@ -357,6 +406,8 @@ namespace ICSharpCode.SharpZipLib.Zip
 				}
 			}
 
+			// Apply any required transforms to the entry name, and then convert to byte array format.
+			TransformEntryName(entry);
 			byte[] name = ZipStrings.ConvertToArray(entry.Flags, entry.Name);
 
 			if (name.Length > 0xFFFF)
@@ -372,7 +423,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 				if (headerInfoAvailable)
 				{
 					ed.AddLeLong(entry.Size);
-					ed.AddLeLong(entry.CompressedSize);
+					ed.AddLeLong(entry.CompressedSize + entry.EncryptionOverheadSize);
 				}
 				else
 				{
@@ -458,6 +509,9 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <summary>
 		/// Closes the current entry, updating header and footer information as required
 		/// </summary>
+		/// <exception cref="ZipException">
+		/// Invalid entry field values.
+		/// </exception>
 		/// <exception cref="System.IO.IOException">
 		/// An I/O error occurs.
 		/// </exception>
@@ -488,7 +542,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 			}
 			else if (curMethod == CompressionMethod.Stored)
 			{
-				// This is done by Finsh() for Deflated entries, but we need to do it
+				// This is done by Finish() for Deflated entries, but we need to do it
 				// ourselves for Stored ones
 				base.GetAuthCodeIfAES();
 			}
@@ -497,6 +551,19 @@ namespace ICSharpCode.SharpZipLib.Zip
 			if (curEntry.AESKeySize > 0)
 			{
 				baseOutputStream_.Write(AESAuthCode, 0, 10);
+				// Always use 0 as CRC for AE-2 format
+				curEntry.Crc = 0;
+			}
+			else
+			{
+				if (curEntry.Crc < 0)
+				{
+					curEntry.Crc = crc.Value;
+				}
+				else if (curEntry.Crc != crc.Value)
+				{
+					throw new ZipException($"crc was {crc.Value}, but {curEntry.Crc} was expected");
+				}
 			}
 
 			if (curEntry.Size < 0)
@@ -505,7 +572,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 			}
 			else if (curEntry.Size != size)
 			{
-				throw new ZipException("size was " + size + ", but I expected " + curEntry.Size);
+				throw new ZipException($"size was {size}, but {curEntry.Size} was expected");
 			}
 
 			if (curEntry.CompressedSize < 0)
@@ -514,30 +581,14 @@ namespace ICSharpCode.SharpZipLib.Zip
 			}
 			else if (curEntry.CompressedSize != csize)
 			{
-				throw new ZipException("compressed size was " + csize + ", but I expected " + curEntry.CompressedSize);
-			}
-
-			if (curEntry.Crc < 0)
-			{
-				curEntry.Crc = crc.Value;
-			}
-			else if (curEntry.Crc != crc.Value)
-			{
-				throw new ZipException("crc was " + crc.Value + ", but I expected " + curEntry.Crc);
+				throw new ZipException($"compressed size was {csize}, but {curEntry.CompressedSize} expected");
 			}
 
 			offset += csize;
 
 			if (curEntry.IsCrypted)
 			{
-				if (curEntry.AESKeySize > 0)
-				{
-					curEntry.CompressedSize += curEntry.AESOverheadSize;
-				}
-				else
-				{
-					curEntry.CompressedSize += ZipConstants.CryptoHeaderSize;
-				}
+				curEntry.CompressedSize += curEntry.EncryptionOverheadSize;
 			}
 
 			// Patch the header if possible
@@ -599,8 +650,11 @@ namespace ICSharpCode.SharpZipLib.Zip
 			InitializePassword(Password);
 
 			byte[] cryptBuffer = new byte[ZipConstants.CryptoHeaderSize];
-			var rnd = new Random();
-			rnd.NextBytes(cryptBuffer);
+			using (var rng = new RNGCryptoServiceProvider())
+			{
+				rng.GetBytes(cryptBuffer);
+			}
+
 			cryptBuffer[11] = (byte)(crcValue >> 24);
 
 			EncryptBlock(cryptBuffer, 0, cryptBuffer.Length);
@@ -680,7 +734,12 @@ namespace ICSharpCode.SharpZipLib.Zip
 				throw new ArgumentException("Invalid offset/count combination");
 			}
 
-			crc.Update(new ArraySegment<byte>(buffer, offset, count));
+			if (curEntry.AESKeySize == 0)
+			{
+				// Only update CRC if AES is not enabled
+				crc.Update(new ArraySegment<byte>(buffer, offset, count));
+			}
+
 			size += count;
 
 			switch (curMethod)
@@ -822,7 +881,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 				byte[] entryComment =
 					(entry.Comment != null) ?
 					ZipStrings.ConvertToArray(entry.Flags, entry.Comment) :
-					new byte[0];
+					Empty.Array<byte>();
 
 				if (entryComment.Length > 0xffff)
 				{
@@ -937,7 +996,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <summary>
 		/// Comment for the entire archive recorded in central header.
 		/// </summary>
-		private byte[] zipComment = new byte[0];
+		private byte[] zipComment = Empty.Array<byte>();
 
 		/// <summary>
 		/// Flag indicating that header patching is required for the current entry.

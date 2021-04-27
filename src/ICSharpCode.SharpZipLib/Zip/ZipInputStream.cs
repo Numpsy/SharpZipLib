@@ -75,6 +75,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 		private long size;
 		private int flags;
 		private string password;
+		private ZipAESTransform cryptoTransform;
 
 		#endregion Instance Fields
 
@@ -125,13 +126,35 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <remarks>
 		/// The entry can only be decompressed if the library supports the zip features required to extract it.
 		/// See the <see cref="ZipEntry.Version">ZipEntry Version</see> property for more details.
+		///
+		/// Since <see cref="ZipInputStream"/> uses the local headers for extraction, entries with no compression combined with the
+		/// <see cref="GeneralBitFlags.Descriptor"/> flag set, cannot be extracted as the end of the entry data cannot be deduced.
 		/// </remarks>
-		public bool CanDecompressEntry
+		public bool CanDecompressEntry 
+			=> entry != null
+			&& IsEntryCompressionMethodSupported(entry)
+			&& entry.CanDecompress
+			&& (!entry.HasFlag(GeneralBitFlags.Descriptor) || entry.CompressionMethod != CompressionMethod.Stored || entry.IsCrypted);
+
+		/// <summary>
+		/// Is the compression method for the specified entry supported?
+		/// </summary>
+		/// <param name="entry">the entry to check.</param>
+		/// <returns>true if the compression method is supported, false if not.</returns>
+		private static bool IsEntryCompressionMethodSupported(ZipEntry entry)
 		{
-			get
-			{
-				return (entry != null) && entry.CanDecompress;
-			}
+			var entryCompressionMethodForHeader = entry.CompressionMethodForHeader;
+			var entryCompressionMethod = entry.CompressionMethod;
+
+			var compressionMethodSupported = 
+				entryCompressionMethod == CompressionMethod.Deflated ||
+				entryCompressionMethod == CompressionMethod.Stored;
+			var entryCompressionMethodForHeaderSupported = 
+				entryCompressionMethodForHeader == CompressionMethod.Deflated ||
+				entryCompressionMethodForHeader == CompressionMethod.Stored ||
+				entryCompressionMethodForHeader == CompressionMethod.WinZipAES;
+
+			return compressionMethodSupported && entryCompressionMethodForHeaderSupported;
 		}
 
 		/// <summary>
@@ -281,7 +304,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 			}
 
 			// Determine how to handle reading of data if this is attempted.
-			if (entry.IsCompressionMethodSupported())
+			if (IsEntryCompressionMethodSupported(entry))
 			{
 				internalReader = new ReadDataHandler(InitialRead);
 			}
@@ -322,32 +345,29 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <summary>
 		/// Complete any decryption processing and clear any cryptographic state.
 		/// </summary>
-		protected override void StopDecrypting()
+		private void StopDecrypting(bool testAESAuthCode)
 		{
-			base.StopDecrypting();
+			StopDecrypting();
 
-			if (entry.AESKeySize != 0)
+			if (testAESAuthCode && entry.AESKeySize != 0)
 			{
 				byte[] authBytes = new byte[ZipConstants.AESAuthCodeLength];
 				int authBytesRead = inputBuffer.ReadRawBuffer(authBytes, 0, authBytes.Length);
 
 				if (authBytesRead < ZipConstants.AESAuthCodeLength)
 				{
-					throw new Exception("Internal error missed auth code"); // Coding bug
-																			// Final block done. Check Auth code.
+					throw new ZipException("Internal error missed auth code"); // Coding bug
 				}
 
-				/*
-				byte[] calcAuthCode = (this.cryptoTransform as ZipAESTransform).GetAuthCode();
+				// Final block done. Check Auth code.
+				byte[] calcAuthCode = this.cryptoTransform.GetAuthCode();
 				for (int i = 0; i < ZipConstants.AESAuthCodeLength; i++)
 				{
 					if (calcAuthCode[i] != authBytes[i])
 					{
-						// throw new Exception("AES Authentication Code does not match. This is a super-CRC check on the data in the file after compression and encryption. \r\n"
-						// 	+ "The file may be damaged.");
+						throw new ZipException("AES Authentication Code does not match. This is a super-CRC check on the data in the file after compression and encryption. The file may be damaged or tampered.");
 					}
 				}
-				*/
 
 				// Dispose the transform?
 			}
@@ -359,7 +379,13 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <param name="testCrc">True if the crc value should be tested</param>
 		private void CompleteCloseEntry(bool testCrc)
 		{
-			StopDecrypting();
+			StopDecrypting(testCrc);
+
+			// AE-2 does not have a CRC by specification. Do not check CRC in this case.
+			if (entry.AESKeySize != 0 && entry.AESVersion == 2)
+			{
+				testCrc = false;
+			}
 
 			if ((flags & 8) != 0)
 			{
@@ -403,6 +429,13 @@ namespace ICSharpCode.SharpZipLib.Zip
 			{
 				return;
 			}
+			
+			// In case of AES encryption we also need to read the 10 Bytes of the auth code.
+			// In case csize is equal to the entry.CompressedSize csize includes those 10 Bytes already.
+			if (entry.IsCrypted && entry.AESKeySize != 0 && entry.CompressedSize != csize) 
+			{
+				csize += ZipConstants.AESAuthCodeLength;
+			}			
 
 			if (entry.CompressionMethod == CompressionMethod.Deflated)
 			{
@@ -419,6 +452,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 				}
 
 				csize -= inf.TotalIn;
+				
 				inputBuffer.Available += inf.RemainingInput;
 			}
 
@@ -522,6 +556,14 @@ namespace ICSharpCode.SharpZipLib.Zip
 		}
 
 		/// <summary>
+		/// Handle attempts to read from this entry by throwing an exception
+		/// </summary>
+		private int StoredDescriptorEntry(byte[] destination, int offset, int count) =>
+			throw new StreamUnsupportedException(
+				"The combination of Stored compression method and Descriptor flag is not possible to read using ZipInputStream");
+		
+
+		/// <summary>
 		/// Perform the initial read on an entry which may include
 		/// reading encryption headers and setting up inflation.
 		/// </summary>
@@ -531,10 +573,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <returns>The actual number of bytes read.</returns>
 		private int InitialRead(byte[] destination, int offset, int count)
 		{
-			if (!CanDecompressEntry)
-			{
-				throw new ZipException("Library cannot extract this entry. Version required is (" + entry.Version + ")");
-			}
+			var usesDescriptor = (entry.Flags & (int)GeneralBitFlags.Descriptor) != 0;
 
 			// Handle encryption if required.
 			if (entry.IsCrypted)
@@ -551,6 +590,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 					byte[] key = PkzipClassic.GenerateKeys(ZipStrings.ConvertToArray(password));
 
 					inputBuffer.CryptoTransform = managed.CreateDecryptor(key, null);
+					inputBuffer.DecryptionLimit = null;
 
 					byte[] cryptbuffer = new byte[ZipConstants.CryptoHeaderSize];
 					inputBuffer.ReadClearTextBuffer(cryptbuffer, 0, ZipConstants.CryptoHeaderSize);
@@ -564,9 +604,9 @@ namespace ICSharpCode.SharpZipLib.Zip
 					{
 						csize -= ZipConstants.CryptoHeaderSize;
 					}
-					else if ((entry.Flags & (int)GeneralBitFlags.Descriptor) == 0)
+					else if (!usesDescriptor)
 					{
-						throw new ZipException(string.Format("Entry compressed size {0} too small for encryption", csize));
+						throw new ZipException($"Entry compressed size {csize} too small for encryption");
 					}
 				}
 				else
@@ -576,26 +616,36 @@ namespace ICSharpCode.SharpZipLib.Zip
 					int saltIn = inputBuffer.ReadRawBuffer(saltBytes, 0, saltLen);
 
 					if (saltIn != saltLen)
+					{
 						throw new ZipException("AES Salt expected " + saltLen + " got " + saltIn);
+					}
 					
 					//
 					byte[] pwdVerifyRead = new byte[ZipConstants.AESPasswordVerifyLength];
 					int pwdBytesRead = inputBuffer.ReadRawBuffer(pwdVerifyRead, 0, pwdVerifyRead.Length);
 
 					if (pwdBytesRead != pwdVerifyRead.Length)
+					{
 						throw new EndOfStreamException();
+					}
 
 					int blockSize = entry.AESKeySize / 8;   // bits to bytes
 
 					var decryptor = new ZipAESTransform(password, saltBytes, blockSize, false);
+					decryptor.ManualHmac = csize < 0;
 					byte[] pwdVerifyCalc = decryptor.PwdVerifier;
 					if (pwdVerifyCalc[0] != pwdVerifyRead[0] || pwdVerifyCalc[1] != pwdVerifyRead[1])
+					{
 						throw new ZipException("Invalid password for AES");
+					}
 
 					// The AES data has saltLen+AESPasswordVerifyLength bytes as a header, and AESAuthCodeLength bytes
 					// as a footer.
 					csize -= (saltLen + ZipConstants.AESPasswordVerifyLength + ZipConstants.AESAuthCodeLength);
+					inputBuffer.DecryptionLimit = csize >= 0 ? (int?)csize : null;
+					
 					inputBuffer.CryptoTransform = decryptor;
+					this.cryptoTransform = decryptor;
 				}
 			}
 			else
@@ -603,21 +653,33 @@ namespace ICSharpCode.SharpZipLib.Zip
 				inputBuffer.CryptoTransform = null;
 			}
 
-			if ((csize > 0) || ((flags & (int)GeneralBitFlags.Descriptor) != 0))
+			if (csize > 0 || usesDescriptor)
 			{
-				if ((entry.CompressionMethod == CompressionMethod.Deflated) && (inputBuffer.Available > 0))
+				if (entry.CompressionMethod == CompressionMethod.Deflated && inputBuffer.Available > 0)
 				{
 					inputBuffer.SetInflaterInput(inf);
 				}
 
-				internalReader = new ReadDataHandler(BodyRead);
+				// It's not possible to know how many bytes to read when using "Stored" compression (unless using encryption)
+				if (!entry.IsCrypted && entry.CompressionMethod == CompressionMethod.Stored && usesDescriptor)
+				{
+					internalReader = StoredDescriptorEntry;
+					return StoredDescriptorEntry(destination, offset, count);
+				}
+
+				if (!CanDecompressEntry)
+				{
+					internalReader = ReadingNotSupported;
+					return ReadingNotSupported(destination, offset, count);
+				}
+
+				internalReader = BodyRead;
 				return BodyRead(destination, offset, count);
 			}
-			else
-			{
-				internalReader = new ReadDataHandler(ReadingNotAvailable);
-				return 0;
-			}
+			
+
+			internalReader = ReadingNotAvailable;
+			return 0;
 		}
 
 		/// <summary>
@@ -659,8 +721,8 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// <returns>
 		/// The number of bytes read (this may be less than the length requested, even before the end of stream), or 0 on end of stream.
 		/// </returns>
-		/// <exception name="IOException">
-		/// An i/o error occured.
+		/// <exception cref="IOException">
+		/// An i/o error occurred.
 		/// </exception>
 		/// <exception cref="ZipException">
 		/// The deflated stream is corrupted.
@@ -738,6 +800,8 @@ namespace ICSharpCode.SharpZipLib.Zip
 						}
 					}
 					break;
+				default:
+					throw new InvalidOperationException("Internal Error: Unsupported compression method encountered.");
 			}
 
 			if (count > 0)
