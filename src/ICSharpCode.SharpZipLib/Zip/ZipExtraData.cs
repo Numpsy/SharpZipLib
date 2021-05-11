@@ -148,11 +148,11 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// Set the data from the raw values provided.
 		/// </summary>
 		/// <param name="data">The raw data to extract values from.</param>
-		/// <param name="index">The index to start extracting values from.</param>
+		/// <param name="offset">The index to start extracting values from.</param>
 		/// <param name="count">The number of bytes available.</param>
-		public void SetData(byte[] data, int index, int count)
+		public void SetData(byte[] data, int offset, int count)
 		{
-			using (MemoryStream ms = new MemoryStream(data, index, count, false))
+			using (MemoryStream ms = new MemoryStream(data, offset, count, false))
 			using (ZipHelperStream helperStream = new ZipHelperStream(ms))
 			{
 				// bit 0           if set, modification time is present
@@ -337,11 +337,11 @@ namespace ICSharpCode.SharpZipLib.Zip
 		/// Set the data from the raw values provided.
 		/// </summary>
 		/// <param name="data">The raw data to extract values from.</param>
-		/// <param name="index">The index to start extracting values from.</param>
+		/// <param name="offset">The index to start extracting values from.</param>
 		/// <param name="count">The number of bytes available.</param>
-		public void SetData(byte[] data, int index, int count)
+		public void SetData(byte[] data, int offset, int count)
 		{
-			using (MemoryStream ms = new MemoryStream(data, index, count, false))
+			using (MemoryStream ms = new MemoryStream(data, offset, count, false))
 			using (ZipHelperStream helperStream = new ZipHelperStream(ms))
 			{
 				helperStream.ReadLEInt(); // Reserved
