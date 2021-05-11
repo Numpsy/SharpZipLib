@@ -148,6 +148,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 	/// Defines the contents of the general bit flags field for an archive entry.
 	/// </summary>
 	[Flags]
+	[System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1700:Do not name enum values 'Reserved'", Justification = "Field names are based on the Zip specification")]
 	public enum GeneralBitFlags
 	{
 		/// <summary>
