@@ -1113,38 +1113,39 @@ namespace ICSharpCode.SharpZipLib.Zip
 				byte[] extraData = new byte[extraDataLength];
 				StreamUtils.ReadFully(baseStream_, extraData);
 
-				var localExtraData = new ZipExtraData(extraData);
-
-				// Extra data / zip64 checks
-				if (localExtraData.Find(1))
+				using (var localExtraData = new ZipExtraData(extraData))
 				{
-					// 2010-03-04 Forum 10512: removed checks for version >= ZipConstants.VersionZip64
-					// and size or compressedSize = MaxValue, due to rogue creators.
-
-					size = localExtraData.ReadLong();
-					compressedSize = localExtraData.ReadLong();
-
-					if ((localFlags & (int)GeneralBitFlags.Descriptor) != 0)
+					// Extra data / zip64 checks
+					if (localExtraData.Find(1))
 					{
-						// These may be valid if patched later
-						if ((size != -1) && (size != entry.Size))
-						{
-							throw new ZipException("Size invalid for descriptor");
-						}
+						// 2010-03-04 Forum 10512: removed checks for version >= ZipConstants.VersionZip64
+						// and size or compressedSize = MaxValue, due to rogue creators.
 
-						if ((compressedSize != -1) && (compressedSize != entry.CompressedSize))
+						size = localExtraData.ReadLong();
+						compressedSize = localExtraData.ReadLong();
+
+						if ((localFlags & (int)GeneralBitFlags.Descriptor) != 0)
 						{
-							throw new ZipException("Compressed size invalid for descriptor");
+							// These may be valid if patched later
+							if ((size != -1) && (size != entry.Size))
+							{
+								throw new ZipException("Size invalid for descriptor");
+							}
+
+							if ((compressedSize != -1) && (compressedSize != entry.CompressedSize))
+							{
+								throw new ZipException("Compressed size invalid for descriptor");
+							}
 						}
 					}
-				}
-				else
-				{
-					// No zip64 extra data but entry requires it.
-					if ((extractVersion >= ZipConstants.VersionZip64) &&
-						(((uint)size == uint.MaxValue) || ((uint)compressedSize == uint.MaxValue)))
+					else
 					{
-						throw new ZipException("Required Zip64 extended information missing");
+						// No zip64 extra data but entry requires it.
+						if ((extractVersion >= ZipConstants.VersionZip64) &&
+							(((uint)size == uint.MaxValue) || ((uint)compressedSize == uint.MaxValue)))
+						{
+							throw new ZipException("Required Zip64 extended information missing");
+						}
 					}
 				}
 
@@ -2155,46 +2156,48 @@ namespace ICSharpCode.SharpZipLib.Zip
 				throw new ZipException("Entry name too long.");
 			}
 
-			var ed = new ZipExtraData(entry.ExtraData);
-
-			if (entry.LocalHeaderRequiresZip64)
+			using (var ed = new ZipExtraData(entry.ExtraData))
 			{
-				ed.StartNewEntry();
-
-				// Local entry header always includes size and compressed size.
-				// NOTE the order of these fields is reversed when compared to the normal headers!
-				ed.AddLeLong(entry.Size);
-				ed.AddLeLong(entry.CompressedSize);
-				ed.AddNewEntry(1);
-			}
-			else
-			{
-				ed.Delete(1);
-			}
-
-			entry.ExtraData = ed.GetEntryData();
-
-			WriteLEShort(name.Length);
-			WriteLEShort(entry.ExtraData.Length);
-
-			if (name.Length > 0)
-			{
-				baseStream_.Write(name, 0, name.Length);
-			}
-
-			if (entry.LocalHeaderRequiresZip64)
-			{
-				if (!ed.Find(1))
+				if (entry.LocalHeaderRequiresZip64)
 				{
-					throw new ZipException("Internal error cannot find extra data");
+					ed.StartNewEntry();
+
+					// Local entry header always includes size and compressed size.
+					// NOTE the order of these fields is reversed when compared to the normal headers!
+					ed.AddLeLong(entry.Size);
+					ed.AddLeLong(entry.CompressedSize);
+					ed.AddNewEntry(1);
+				}
+				else
+				{
+					ed.Delete(1);
 				}
 
-				update.SizePatchOffset = baseStream_.Position + ed.CurrentReadIndex;
-			}
+				entry.ExtraData = ed.GetEntryData();
 
-			if (entry.ExtraData.Length > 0)
-			{
-				baseStream_.Write(entry.ExtraData, 0, entry.ExtraData.Length);
+
+				WriteLEShort(name.Length);
+				WriteLEShort(entry.ExtraData.Length);
+
+				if (name.Length > 0)
+				{
+					baseStream_.Write(name, 0, name.Length);
+				}
+
+				if (entry.LocalHeaderRequiresZip64)
+				{
+					if (!ed.Find(1))
+					{
+						throw new ZipException("Internal error cannot find extra data");
+					}
+
+					update.SizePatchOffset = baseStream_.Position + ed.CurrentReadIndex;
+				}
+
+				if (entry.ExtraData.Length > 0)
+				{
+					baseStream_.Write(entry.ExtraData, 0, entry.ExtraData.Length);
+				}
 			}
 		}
 
@@ -2265,88 +2268,89 @@ namespace ICSharpCode.SharpZipLib.Zip
 			WriteLEShort(name.Length);
 
 			// Central header extra data is different to local header version so regenerate.
-			var ed = new ZipExtraData(entry.ExtraData);
-
-			if (entry.CentralHeaderRequiresZip64)
+			using (var ed = new ZipExtraData(entry.ExtraData))
 			{
-				ed.StartNewEntry();
-
-				if (useExtraUncompressedSize)
+				if (entry.CentralHeaderRequiresZip64)
 				{
-					ed.AddLeLong(entry.Size);
+					ed.StartNewEntry();
+
+					if (useExtraUncompressedSize)
+					{
+						ed.AddLeLong(entry.Size);
+					}
+
+					if (useExtraCompressedSize)
+					{
+						ed.AddLeLong(entry.CompressedSize);
+					}
+
+					if (entry.Offset >= 0xffffffff)
+					{
+						ed.AddLeLong(entry.Offset);
+					}
+
+					// Number of disk on which this file starts isnt supported and is never written here.
+					ed.AddNewEntry(1);
+				}
+				else
+				{
+					// Should have already be done when local header was added.
+					ed.Delete(1);
 				}
 
-				if (useExtraCompressedSize)
+				byte[] centralExtraData = ed.GetEntryData();
+
+				WriteLEShort(centralExtraData.Length);
+				WriteLEShort(entry.Comment != null ? entry.Comment.Length : 0);
+
+				WriteLEShort(0);    // disk number
+				WriteLEShort(0);    // internal file attributes
+
+				// External file attributes...
+				if (entry.ExternalFileAttributes != -1)
 				{
-					ed.AddLeLong(entry.CompressedSize);
+					WriteLEInt(entry.ExternalFileAttributes);
+				}
+				else
+				{
+					if (entry.IsDirectory)
+					{
+						WriteLEUint(16);
+					}
+					else
+					{
+						WriteLEUint(0);
+					}
 				}
 
 				if (entry.Offset >= 0xffffffff)
 				{
-					ed.AddLeLong(entry.Offset);
-				}
-
-				// Number of disk on which this file starts isnt supported and is never written here.
-				ed.AddNewEntry(1);
-			}
-			else
-			{
-				// Should have already be done when local header was added.
-				ed.Delete(1);
-			}
-
-			byte[] centralExtraData = ed.GetEntryData();
-
-			WriteLEShort(centralExtraData.Length);
-			WriteLEShort(entry.Comment != null ? entry.Comment.Length : 0);
-
-			WriteLEShort(0);    // disk number
-			WriteLEShort(0);    // internal file attributes
-
-			// External file attributes...
-			if (entry.ExternalFileAttributes != -1)
-			{
-				WriteLEInt(entry.ExternalFileAttributes);
-			}
-			else
-			{
-				if (entry.IsDirectory)
-				{
-					WriteLEUint(16);
+					WriteLEUint(0xffffffff);
 				}
 				else
 				{
-					WriteLEUint(0);
+					WriteLEUint((uint)(int)entry.Offset);
 				}
-			}
 
-			if (entry.Offset >= 0xffffffff)
-			{
-				WriteLEUint(0xffffffff);
-			}
-			else
-			{
-				WriteLEUint((uint)(int)entry.Offset);
-			}
+				if (name.Length > 0)
+				{
+					baseStream_.Write(name, 0, name.Length);
+				}
 
-			if (name.Length > 0)
-			{
-				baseStream_.Write(name, 0, name.Length);
+				if (centralExtraData.Length > 0)
+				{
+					baseStream_.Write(centralExtraData, 0, centralExtraData.Length);
+				}
+
+				byte[] rawComment = (entry.Comment != null) ? Encoding.ASCII.GetBytes(entry.Comment) : Empty.Array<byte>();
+
+				if (rawComment.Length > 0)
+				{
+					baseStream_.Write(rawComment, 0, rawComment.Length);
+				}
+
+				return ZipConstants.CentralHeaderBaseSize + name.Length + centralExtraData.Length + rawComment.Length;
 			}
-
-			if (centralExtraData.Length > 0)
-			{
-				baseStream_.Write(centralExtraData, 0, centralExtraData.Length);
-			}
-
-			byte[] rawComment = (entry.Comment != null) ? Encoding.ASCII.GetBytes(entry.Comment) : Empty.Array<byte>();
-
-			if (rawComment.Length > 0)
-			{
-				baseStream_.Write(rawComment, 0, rawComment.Length);
-			}
-
-			return ZipConstants.CentralHeaderBaseSize + name.Length + centralExtraData.Length + rawComment.Length;
 		}
 
 		#endregion Writing Values/Headers

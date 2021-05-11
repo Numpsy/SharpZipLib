@@ -834,99 +834,100 @@ namespace ICSharpCode.SharpZipLib.Zip
 					throw new ZipException("Name too long.");
 				}
 
-				var ed = new ZipExtraData(entry.ExtraData);
-
-				if (entry.CentralHeaderRequiresZip64)
+				using (var ed = new ZipExtraData(entry.ExtraData))
 				{
-					ed.StartNewEntry();
-					if (entry.IsZip64Forced() ||
-						(entry.Size >= 0xffffffff))
+					if (entry.CentralHeaderRequiresZip64)
 					{
-						ed.AddLeLong(entry.Size);
-					}
+						ed.StartNewEntry();
+						if (entry.IsZip64Forced() ||
+							(entry.Size >= 0xffffffff))
+						{
+							ed.AddLeLong(entry.Size);
+						}
 
-					if (entry.IsZip64Forced() ||
-						(entry.CompressedSize >= 0xffffffff))
-					{
-						ed.AddLeLong(entry.CompressedSize);
-					}
+						if (entry.IsZip64Forced() ||
+							(entry.CompressedSize >= 0xffffffff))
+						{
+							ed.AddLeLong(entry.CompressedSize);
+						}
 
-					if (entry.Offset >= 0xffffffff)
-					{
-						ed.AddLeLong(entry.Offset);
-					}
+						if (entry.Offset >= 0xffffffff)
+						{
+							ed.AddLeLong(entry.Offset);
+						}
 
-					ed.AddNewEntry(1);
-				}
-				else
-				{
-					ed.Delete(1);
-				}
-
-				if (entry.AESKeySize > 0)
-				{
-					AddExtraDataAES(entry, ed);
-				}
-				byte[] extra = ed.GetEntryData();
-
-				byte[] entryComment =
-					(entry.Comment != null) ?
-					ZipStrings.ConvertToArray(entry.Flags, entry.Comment) :
-					Empty.Array<byte>();
-
-				if (entryComment.Length > 0xffff)
-				{
-					throw new ZipException("Comment too long.");
-				}
-
-				WriteLeShort(name.Length);
-				WriteLeShort(extra.Length);
-				WriteLeShort(entryComment.Length);
-				WriteLeShort(0);    // disk number
-				WriteLeShort(0);    // internal file attributes
-									// external file attributes
-
-				if (entry.ExternalFileAttributes != -1)
-				{
-					WriteLeInt(entry.ExternalFileAttributes);
-				}
-				else
-				{
-					if (entry.IsDirectory)
-					{                         // mark entry as directory (from nikolam.AT.perfectinfo.com)
-						WriteLeInt(16);
+						ed.AddNewEntry(1);
 					}
 					else
 					{
-						WriteLeInt(0);
+						ed.Delete(1);
 					}
-				}
 
-				if (entry.Offset >= uint.MaxValue)
-				{
-					WriteLeInt(-1);
-				}
-				else
-				{
-					WriteLeInt((int)entry.Offset);
-				}
+					if (entry.AESKeySize > 0)
+					{
+						AddExtraDataAES(entry, ed);
+					}
+					byte[] extra = ed.GetEntryData();
 
-				if (name.Length > 0)
-				{
-					baseOutputStream_.Write(name, 0, name.Length);
-				}
+					byte[] entryComment =
+						(entry.Comment != null) ?
+						ZipStrings.ConvertToArray(entry.Flags, entry.Comment) :
+						Empty.Array<byte>();
 
-				if (extra.Length > 0)
-				{
-					baseOutputStream_.Write(extra, 0, extra.Length);
-				}
+					if (entryComment.Length > 0xffff)
+					{
+						throw new ZipException("Comment too long.");
+					}
 
-				if (entryComment.Length > 0)
-				{
-					baseOutputStream_.Write(entryComment, 0, entryComment.Length);
-				}
+					WriteLeShort(name.Length);
+					WriteLeShort(extra.Length);
+					WriteLeShort(entryComment.Length);
+					WriteLeShort(0);    // disk number
+					WriteLeShort(0);    // internal file attributes
+										// external file attributes
 
-				sizeEntries += ZipConstants.CentralHeaderBaseSize + name.Length + extra.Length + entryComment.Length;
+					if (entry.ExternalFileAttributes != -1)
+					{
+						WriteLeInt(entry.ExternalFileAttributes);
+					}
+					else
+					{
+						if (entry.IsDirectory)
+						{                         // mark entry as directory (from nikolam.AT.perfectinfo.com)
+							WriteLeInt(16);
+						}
+						else
+						{
+							WriteLeInt(0);
+						}
+					}
+
+					if (entry.Offset >= uint.MaxValue)
+					{
+						WriteLeInt(-1);
+					}
+					else
+					{
+						WriteLeInt((int)entry.Offset);
+					}
+
+					if (name.Length > 0)
+					{
+						baseOutputStream_.Write(name, 0, name.Length);
+					}
+
+					if (extra.Length > 0)
+					{
+						baseOutputStream_.Write(extra, 0, extra.Length);
+					}
+
+					if (entryComment.Length > 0)
+					{
+						baseOutputStream_.Write(entryComment, 0, entryComment.Length);
+					}
+
+					sizeEntries += ZipConstants.CentralHeaderBaseSize + name.Length + extra.Length + entryComment.Length;
+				}
 			}
 
 			using (ZipHelperStream zhs = new ZipHelperStream(baseOutputStream_))
