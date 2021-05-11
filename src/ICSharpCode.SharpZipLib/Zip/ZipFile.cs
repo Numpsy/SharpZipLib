@@ -313,6 +313,7 @@ namespace ICSharpCode.SharpZipLib.Zip
 	/// }
 	/// </code>
 	/// </example>
+	[System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1710:Identifiers should have correct suffix", Justification = "We don't want to call it ZipFileCollection")]
 	public class ZipFile : IEnumerable, IDisposable
 	{
 		#region KeyHandling
