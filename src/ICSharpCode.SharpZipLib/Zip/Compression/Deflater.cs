@@ -12,6 +12,7 @@ namespace ICSharpCode.SharpZipLib.Zip.Compression
 	///
 	/// author of the original java version : Jochen Hoenicke
 	/// </summary>
+	[System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores", Justification = "Public API, left for backwards compatibility")]
 	public class Deflater
 	{
 		#region Deflater Documentation

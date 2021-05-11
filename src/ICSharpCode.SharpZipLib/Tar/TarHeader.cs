@@ -38,6 +38,7 @@ namespace ICSharpCode.SharpZipLib.Tar
 	/// 	char t_mfill[12];          // 500 Filler up to 512
 	/// };
 	/// </remarks>
+	[System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1707:Identifiers should not contain underscores", Justification = "Public API, left for backwards compatibility")]
 	public class TarHeader
 	{
 		#region Constants
@@ -111,6 +112,7 @@ namespace ICSharpCode.SharpZipLib.Tar
 		/// The length of the name prefix field in a header buffer.
 		/// </summary>
 		public const int PREFIXLEN = 155;
+
 
 		//
 		// LF_ constants represent the "type" of an entry
