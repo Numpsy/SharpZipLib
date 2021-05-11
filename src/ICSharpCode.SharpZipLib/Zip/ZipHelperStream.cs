@@ -243,56 +243,57 @@ namespace ICSharpCode.SharpZipLib.Zip
 				throw new ZipException("Entry name too long.");
 			}
 
-			var ed = new ZipExtraData(entry.ExtraData);
-
-			if (entry.LocalHeaderRequiresZip64 && (headerInfoAvailable || patchEntryHeader))
+			using (var ed = new ZipExtraData(entry.ExtraData))
 			{
-				ed.StartNewEntry();
-				if (headerInfoAvailable)
+				if (entry.LocalHeaderRequiresZip64 && (headerInfoAvailable || patchEntryHeader))
 				{
-					ed.AddLeLong(entry.Size);
-					ed.AddLeLong(entry.CompressedSize);
+					ed.StartNewEntry();
+					if (headerInfoAvailable)
+					{
+						ed.AddLeLong(entry.Size);
+						ed.AddLeLong(entry.CompressedSize);
+					}
+					else
+					{
+						ed.AddLeLong(-1);
+						ed.AddLeLong(-1);
+					}
+					ed.AddNewEntry(1);
+
+					if (!ed.Find(1))
+					{
+						throw new ZipException("Internal error cant find extra data");
+					}
+
+					if (patchData != null)
+					{
+						patchData.SizePatchOffset = ed.CurrentReadIndex;
+					}
 				}
 				else
 				{
-					ed.AddLeLong(-1);
-					ed.AddLeLong(-1);
+					ed.Delete(1);
 				}
-				ed.AddNewEntry(1);
 
-				if (!ed.Find(1))
+				byte[] extra = ed.GetEntryData();
+
+				WriteLEShort(name.Length);
+				WriteLEShort(extra.Length);
+
+				if (name.Length > 0)
 				{
-					throw new ZipException("Internal error cant find extra data");
+					stream_.Write(name, 0, name.Length);
 				}
 
-				if (patchData != null)
+				if (entry.LocalHeaderRequiresZip64 && patchEntryHeader)
 				{
-					patchData.SizePatchOffset = ed.CurrentReadIndex;
+					patchData.SizePatchOffset += stream_.Position;
 				}
-			}
-			else
-			{
-				ed.Delete(1);
-			}
 
-			byte[] extra = ed.GetEntryData();
-
-			WriteLEShort(name.Length);
-			WriteLEShort(extra.Length);
-
-			if (name.Length > 0)
-			{
-				stream_.Write(name, 0, name.Length);
-			}
-
-			if (entry.LocalHeaderRequiresZip64 && patchEntryHeader)
-			{
-				patchData.SizePatchOffset += stream_.Position;
-			}
-
-			if (extra.Length > 0)
-			{
-				stream_.Write(extra, 0, extra.Length);
+				if (extra.Length > 0)
+				{
+					stream_.Write(extra, 0, extra.Length);
+				}
 			}
 		}
 

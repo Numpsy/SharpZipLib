@@ -406,92 +406,93 @@ namespace ICSharpCode.SharpZipLib.Zip
 				throw new ZipException("Entry name too long.");
 			}
 
-			var ed = new ZipExtraData(entry.ExtraData);
-
-			if (entry.LocalHeaderRequiresZip64)
+			using (var ed = new ZipExtraData(entry.ExtraData))
 			{
-				ed.StartNewEntry();
-				if (headerInfoAvailable)
+				if (entry.LocalHeaderRequiresZip64)
 				{
-					ed.AddLeLong(entry.Size);
-					ed.AddLeLong(entry.CompressedSize + entry.EncryptionOverheadSize);
-				}
-				else
-				{
-					ed.AddLeLong(-1);
-					ed.AddLeLong(-1);
-				}
-				ed.AddNewEntry(1);
-
-				if (!ed.Find(1))
-				{
-					throw new ZipException("Internal error cant find extra data");
-				}
-
-				if (patchEntryHeader)
-				{
-					sizePatchPos = ed.CurrentReadIndex;
-				}
-			}
-			else
-			{
-				ed.Delete(1);
-			}
-
-			if (entry.AESKeySize > 0)
-			{
-				AddExtraDataAES(entry, ed);
-			}
-			byte[] extra = ed.GetEntryData();
-
-			WriteLeShort(name.Length);
-			WriteLeShort(extra.Length);
-
-			if (name.Length > 0)
-			{
-				baseOutputStream_.Write(name, 0, name.Length);
-			}
-
-			if (entry.LocalHeaderRequiresZip64 && patchEntryHeader)
-			{
-				sizePatchPos += baseOutputStream_.Position;
-			}
-
-			if (extra.Length > 0)
-			{
-				baseOutputStream_.Write(extra, 0, extra.Length);
-			}
-
-			offset += ZipConstants.LocalHeaderBaseSize + name.Length + extra.Length;
-			// Fix offsetOfCentraldir for AES
-			if (entry.AESKeySize > 0)
-				offset += entry.AESOverheadSize;
-
-			// Activate the entry.
-			curEntry = entry;
-			crc.Reset();
-			if (method == CompressionMethod.Deflated)
-			{
-				deflater_.Reset();
-				deflater_.SetLevel(compressionLevel);
-			}
-			size = 0;
-
-			if (entry.IsCrypted)
-			{
-				if (entry.AESKeySize > 0)
-				{
-					WriteAESHeader(entry);
-				}
-				else
-				{
-					if (entry.Crc < 0)
-					{            // so testing Zip will says its ok
-						WriteEncryptionHeader(entry.DosTime << 16);
+					ed.StartNewEntry();
+					if (headerInfoAvailable)
+					{
+						ed.AddLeLong(entry.Size);
+						ed.AddLeLong(entry.CompressedSize + entry.EncryptionOverheadSize);
 					}
 					else
 					{
-						WriteEncryptionHeader(entry.Crc);
+						ed.AddLeLong(-1);
+						ed.AddLeLong(-1);
+					}
+					ed.AddNewEntry(1);
+
+					if (!ed.Find(1))
+					{
+						throw new ZipException("Internal error cant find extra data");
+					}
+
+					if (patchEntryHeader)
+					{
+						sizePatchPos = ed.CurrentReadIndex;
+					}
+				}
+				else
+				{
+					ed.Delete(1);
+				}
+
+				if (entry.AESKeySize > 0)
+				{
+					AddExtraDataAES(entry, ed);
+				}
+				byte[] extra = ed.GetEntryData();
+
+				WriteLeShort(name.Length);
+				WriteLeShort(extra.Length);
+
+				if (name.Length > 0)
+				{
+					baseOutputStream_.Write(name, 0, name.Length);
+				}
+
+				if (entry.LocalHeaderRequiresZip64 && patchEntryHeader)
+				{
+					sizePatchPos += baseOutputStream_.Position;
+				}
+
+				if (extra.Length > 0)
+				{
+					baseOutputStream_.Write(extra, 0, extra.Length);
+				}
+
+				offset += ZipConstants.LocalHeaderBaseSize + name.Length + extra.Length;
+				// Fix offsetOfCentraldir for AES
+				if (entry.AESKeySize > 0)
+					offset += entry.AESOverheadSize;
+
+				// Activate the entry.
+				curEntry = entry;
+				crc.Reset();
+				if (method == CompressionMethod.Deflated)
+				{
+					deflater_.Reset();
+					deflater_.SetLevel(compressionLevel);
+				}
+				size = 0;
+
+				if (entry.IsCrypted)
+				{
+					if (entry.AESKeySize > 0)
+					{
+						WriteAESHeader(entry);
+					}
+					else
+					{
+						if (entry.Crc < 0)
+						{            // so testing Zip will says its ok
+							WriteEncryptionHeader(entry.DosTime << 16);
+						}
+						else
+						{
+							WriteEncryptionHeader(entry.Crc);
+						}
 					}
 				}
 			}
