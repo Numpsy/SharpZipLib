@@ -1004,26 +1004,28 @@ namespace ICSharpCode.SharpZipLib.Zip
 
 						if ((this[entryIndex].Flags & (int)GeneralBitFlags.Descriptor) != 0)
 						{
-							var helper = new ZipHelperStream(baseStream_);
-							var data = new DescriptorData();
-							helper.ReadDataDescriptor(this[entryIndex].LocalHeaderRequiresZip64, data);
-
-							if (checkCRC && this[entryIndex].Crc != data.Crc)
+							using (var helper = new ZipHelperStream(baseStream_))
 							{
-								status.AddError();
-								resultHandler?.Invoke(status, "Descriptor CRC mismatch");
-							}
+								var data = new DescriptorData();
+								helper.ReadDataDescriptor(this[entryIndex].LocalHeaderRequiresZip64, data);
 
-							if (this[entryIndex].CompressedSize != data.CompressedSize)
-							{
-								status.AddError();
-								resultHandler?.Invoke(status, "Descriptor compressed size mismatch");
-							}
+								if (checkCRC && this[entryIndex].Crc != data.Crc)
+								{
+									status.AddError();
+									resultHandler?.Invoke(status, "Descriptor CRC mismatch");
+								}
 
-							if (this[entryIndex].Size != data.Size)
-							{
-								status.AddError();
-								resultHandler?.Invoke(status, "Descriptor size mismatch");
+								if (this[entryIndex].CompressedSize != data.CompressedSize)
+								{
+									status.AddError();
+									resultHandler?.Invoke(status, "Descriptor compressed size mismatch");
+								}
+
+								if (this[entryIndex].Size != data.Size)
+								{
+									status.AddError();
+									resultHandler?.Invoke(status, "Descriptor size mismatch");
+								}
 							}
 						}
 					}
@@ -2733,8 +2735,10 @@ namespace ICSharpCode.SharpZipLib.Zip
 
 					if ((update.OutEntry.Flags & (int)GeneralBitFlags.Descriptor) == (int)GeneralBitFlags.Descriptor)
 					{
-						var helper = new ZipHelperStream(workFile.baseStream_);
-						helper.WriteDataDescriptor(update.OutEntry);
+						using (var helper = new ZipHelperStream(workFile.baseStream_))
+						{
+							helper.WriteDataDescriptor(update.OutEntry);
+						}
 					}
 				}
 			}
